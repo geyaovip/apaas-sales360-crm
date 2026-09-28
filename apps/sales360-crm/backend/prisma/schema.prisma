@@ -1,0 +1,436 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                 String   @id @default(uuid())
+  slug               String   @unique
+  name               String
+  timezone           String   @default("Asia/Shanghai")
+  approvalRequired   Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  users              User[]
+  orgUnits           OrgUnit[]
+  memberships        Membership[]
+  leads              Lead[]
+  customers          Customer[]
+  opportunities      Opportunity[]
+  followUps          FollowUp[]
+  tasks              Task[]
+  audits             AuditLog[]
+  outbox             OutboxEvent[]
+  sessions           Session[]
+  salesPools         SalesPool[]
+  idempotencyKeys    IdempotencyKey[]
+  platformConnections PlatformConnection[]
+  externalIdentities ExternalIdentity[]
+  servicePlans       ServicePlan[]
+  serviceRisks       ServiceRisk[]
+}
+
+model User {
+  id           String       @id @default(uuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  email        String
+  passwordHash String
+  name         String
+  active       Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  memberships  Membership[]
+  sessions     Session[]
+  identities   ExternalIdentity[]
+  poolMembers  SalesPoolMember[]
+  @@unique([tenantId, email])
+  @@index([tenantId, active])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId, expiresAt])
+}
+
+model OrgUnit {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  name      String
+  parentId  String?
+  parent    OrgUnit? @relation("OrgTree", fields: [parentId], references: [id])
+  children  OrgUnit[] @relation("OrgTree")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  memberships Membership[]
+  @@index([tenantId, parentId])
+}
+
+model Membership {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  orgUnitId String
+  orgUnit   OrgUnit  @relation(fields: [orgUnitId], references: [id])
+  role      String
+  createdAt DateTime @default(now())
+  @@unique([tenantId, userId, orgUnitId, role])
+  @@index([tenantId, orgUnitId, role])
+}
+
+model Lead {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  tenant              Tenant   @relation(fields: [tenantId], references: [id])
+  name                String
+  contactName         String?
+  contactPhone        String?
+  contactEmail        String?
+  source              String
+  notes               String?
+  status              String   @default("new")
+  orgUnitId           String
+  ownerId             String?
+  createdById         String
+  version             Int      @default(1)
+  duplicateConfirmed  Boolean  @default(false)
+  assignedAt          DateTime?
+  firstProcessedAt    DateTime?
+  convertedAt         DateTime?
+  convertedCustomerId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+  assignments         LeadAssignment[]
+  conversionRequests  ConversionRequest[]
+  @@index([tenantId, status, ownerId])
+  @@index([tenantId, orgUnitId, createdAt])
+  @@index([tenantId, name])
+}
+
+model LeadAssignment {
+  id         String   @id @default(uuid())
+  tenantId   String
+  leadId     String
+  lead       Lead     @relation(fields: [leadId], references: [id])
+  fromUserId String?
+  toUserId   String
+  reason     String?
+  strategy   String
+  actorId    String
+  createdAt  DateTime @default(now())
+  @@index([tenantId, leadId, createdAt])
+}
+
+model ConversionRequest {
+  id           String   @id @default(uuid())
+  tenantId     String
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id])
+  requestedBy  String
+  reviewedBy   String?
+  status       String   @default("pending")
+  reason       String?
+  createdAt    DateTime @default(now())
+  reviewedAt   DateTime?
+  @@index([tenantId, leadId, status])
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  name           String
+  normalizedName String
+  registrationId String?
+  industry       String?
+  region         String?
+  ownerId        String
+  serviceOwnerId String?
+  orgUnitId      String
+  status         String   @default("active")
+  sourceLeadId   String?
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+  contacts       Contact[]
+  opportunities  Opportunity[]
+  servicePlans   ServicePlan[]
+  serviceRisks   ServiceRisk[]
+  @@unique([tenantId, registrationId])
+  @@index([tenantId, ownerId])
+  @@index([tenantId, normalizedName])
+}
+
+model Contact {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  customerId          String
+  customer            Customer @relation(fields: [customerId], references: [id])
+  name                String
+  title               String?
+  phone               String?
+  email               String?
+  preferredContact    String?
+  version             Int      @default(1)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deletedAt           DateTime?
+  @@index([tenantId, customerId])
+}
+
+model Opportunity {
+  id               String   @id @default(uuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  customerId       String
+  customer         Customer @relation(fields: [customerId], references: [id])
+  name             String
+  ownerId          String
+  orgUnitId        String
+  stage            String   @default("discovery")
+  kind             String   @default("new")
+  amount           Decimal  @default(0) @db.Decimal(18, 2)
+  currency         String   @default("CNY")
+  probability      Int      @default(10)
+  expectedCloseAt  DateTime?
+  actualAmount     Decimal? @db.Decimal(18, 2)
+  actualCloseAt    DateTime?
+  lostReason       String?
+  nextAction       String?
+  nextActionAt     DateTime?
+  version          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  deletedAt        DateTime?
+  participants     OpportunityParticipant[]
+  @@index([tenantId, ownerId, stage])
+  @@index([tenantId, customerId])
+}
+
+model ServicePlan {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  title      String
+  ownerId    String
+  startsAt   DateTime
+  endsAt     DateTime
+  status     String   @default("active")
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  tasks      ServiceTask[]
+  @@index([tenantId, ownerId, status])
+  @@index([tenantId, customerId])
+}
+
+model ServiceTask {
+  id             String   @id @default(uuid())
+  tenantId       String
+  planId         String
+  plan           ServicePlan @relation(fields: [planId], references: [id])
+  title          String
+  assigneeId     String
+  dueAt          DateTime
+  status         String   @default("open")
+  completionNote String?
+  reviewReason   String?
+  reviewedBy     String?
+  submittedAt    DateTime?
+  reviewedAt     DateTime?
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@index([tenantId, assigneeId, status])
+  @@index([tenantId, planId])
+}
+
+model ServiceRisk {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  title      String
+  severity   String
+  detail     String
+  status     String   @default("open")
+  resolution String?
+  ownerId    String
+  createdAt  DateTime @default(now())
+  closedAt   DateTime?
+  @@index([tenantId, customerId, status])
+  @@index([tenantId, ownerId, status])
+}
+
+model OpportunityParticipant {
+  id            String      @id @default(uuid())
+  tenantId      String
+  opportunityId String
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  userId        String
+  @@unique([opportunityId, userId])
+  @@index([tenantId, userId])
+}
+
+model FollowUp {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  targetType  String
+  targetId    String
+  authorId    String
+  type        String
+  content     String
+  occurredAt  DateTime
+  nextAt      DateTime?
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+  @@index([tenantId, targetType, targetId])
+  @@index([tenantId, authorId, nextAt])
+}
+
+model Task {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  assigneeId String
+  title      String
+  targetType String
+  targetId   String
+  dueAt      DateTime?
+  status     String   @default("open")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([tenantId, assigneeId, status, dueAt])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  actorId      String
+  action       String
+  resourceType String
+  resourceId   String
+  before       Json?
+  after        Json?
+  requestId    String?
+  createdAt    DateTime @default(now())
+  @@index([tenantId, resourceType, resourceId, createdAt])
+}
+
+model AiConversation {
+  id          String   @id @default(uuid())
+  tenantId    String
+  userId      String
+  contextType String
+  contextId   String?
+  title       String
+  messages    Json     @default("[]")
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@index([tenantId, userId, updatedAt])
+}
+
+model OutboxEvent {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  eventType   String
+  payload     Json
+  dedupeKey   String
+  status      String   @default("pending")
+  attempts    Int      @default(0)
+  lastError   String?
+  nextAttemptAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@unique([tenantId, dedupeKey])
+  @@index([status, nextAttemptAt])
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  userId       String
+  key          String
+  requestHash  String
+  response     Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  @@unique([tenantId, userId, key])
+}
+
+model SalesPool {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  orgUnitId   String
+  name        String
+  nextIndex   Int      @default(0)
+  version     Int      @default(1)
+  active      Boolean  @default(true)
+  members     SalesPoolMember[]
+  @@index([tenantId, orgUnitId, active])
+}
+
+model SalesPoolMember {
+  id       String    @id @default(uuid())
+  poolId   String
+  pool     SalesPool @relation(fields: [poolId], references: [id])
+  userId   String
+  user     User      @relation(fields: [userId], references: [id])
+  position Int
+  active   Boolean   @default(true)
+  @@unique([poolId, userId])
+  @@unique([poolId, position])
+}
+
+model PlatformConnection {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  platform   String
+  status     String   @default("not_connected")
+  configRef  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@unique([tenantId, platform])
+}
+
+model ExternalIdentity {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  platform       String
+  externalUserId String
+  appId          String
+  createdAt      DateTime @default(now())
+  @@unique([tenantId, platform, appId, externalUserId])
+}

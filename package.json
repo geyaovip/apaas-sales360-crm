@@ -1,0 +1,16 @@
+{
+  "name": "apaas-sales360-crm",
+  "private": true,
+  "packageManager": "pnpm@11.2.2",
+  "scripts": {
+    "dev:crm:api": "pnpm --filter @apaas/sales360-backend dev",
+    "dev:crm:web": "pnpm --filter @apaas/sales360-frontend dev",
+    "build:crm": "pnpm --filter @apaas/sales360-backend build && pnpm --filter @apaas/sales360-frontend build",
+    "test:crm": "pnpm --filter @apaas/sales360-backend test:e2e",
+    "local:seed": "pnpm --filter @apaas/sales360-backend local:seed",
+    "setup:local": "node scripts/init-local.mjs",
+    "start:local": "node scripts/start-local.mjs",
+    "backup:local": "node scripts/backup-local.mjs",
+    "deploy:cloudflare": "pnpm --filter @apaas/sales360-frontend build && npx --yes wrangler@4.142.0 deploy"
+  }
+}
