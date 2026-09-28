@@ -49,11 +49,14 @@ export class CrmController {
   @Get('dashboard') dashboard(@Req() r: AuthRequest) { return this.crm.dashboard(r.actor); }
   @Get('reports/leads') leadReport(@Req() r: AuthRequest, @Query() q: Record<string, unknown>) { return this.crm.leadReport(r.actor, q); }
 
+  @Get('admin/users') adminUsers(@Req() r: AuthRequest) { return this.crm.adminUsers(r.actor); }
   @Post('admin/users') createUser(@Req() r: AuthRequest, @Body() b: unknown) { return this.crm.createUser(r.actor, b); }
+  @Patch('admin/users/:id/membership') updateMembership(@Req() r: AuthRequest, @Param('id') id: string, @Body() b: unknown) { return this.crm.updateMembership(r.actor, id, b); }
   @Patch('admin/users/:id/active') setUserActive(@Req() r: AuthRequest, @Param('id') id: string, @Body() b: unknown) { const v = parse(z.object({ active: z.boolean() }), b); return this.crm.setUserActive(r.actor, id, v.active); }
   @Post('admin/org-units') createOrg(@Req() r: AuthRequest, @Body() b: unknown) { return this.crm.createOrg(r.actor, b); }
   @Get('admin/lead-pools') listPools(@Req() r: AuthRequest) { return this.crm.listPools(r.actor); }
   @Post('admin/lead-pools') createPool(@Req() r: AuthRequest, @Body() b: unknown) { return this.crm.createPool(r.actor, b); }
+  @Patch('admin/lead-pools/:id') updatePool(@Req() r: AuthRequest, @Param('id') id: string, @Body() b: unknown) { return this.crm.updatePool(r.actor, id, b); }
   @Post('admin/lead-pools/:poolId/assign/:leadId') autoAssign(@Req() r: AuthRequest, @Param('poolId') poolId: string, @Param('leadId') leadId: string, @Body() b: unknown) { return this.crm.autoAssign(r.actor, poolId, leadId, b); }
 }
 

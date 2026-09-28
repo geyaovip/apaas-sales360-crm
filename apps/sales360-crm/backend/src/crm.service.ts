@@ -471,22 +471,66 @@ export class CrmService {
     return { from: from.toISOString(), to: to.toISOString(), assigned, processed, processing_rate: assigned ? processed / assigned : null, definition: '周期内首次分配的线索中，已发生首次有效处理动作的比例', by_owner: byOwner.map(x => ({ owner_id: x.ownerId, count: x._count._all })) };
   }
 
+  async adminUsers(actor: Actor) {
+    requireRole(actor, 'admin');
+    return this.db.user.findMany({ where: { tenantId: actor.tenantId }, select: { id: true, name: true, email: true, active: true, memberships: { select: { id: true, role: true, orgUnitId: true } } }, orderBy: { name: 'asc' } });
+  }
+  async updateMembership(actor: Actor, userId: string, body: unknown) {
+    requireRole(actor, 'admin');
+    const input = parse(z.object({ role: z.enum(['admin', 'marketing', 'manager', 'sales', 'csm']), membership_id: uuid }), body);
+    const user = await this.db.user.findFirst({ where: { id: userId, tenantId: actor.tenantId }, include: { memberships: true } });
+    if (!user) bad('NOT_FOUND', '成员不存在', 404);
+    if (user.id === actor.id && input.role !== 'admin' && user.memberships.filter(m => m.role === 'admin').length <= 1) bad('SELF_CHANGE', '不能移除自己的管理员角色');
+    const membership = user.memberships.find(m => m.id === input.membership_id);
+    if (!membership) bad('MEMBERSHIP_NOT_FOUND', '该成员不属于所选组织', 404);
+    if (user.memberships.some(m => m.id !== membership.id && m.orgUnitId === membership.orgUnitId && m.role === input.role)) bad('MEMBERSHIP_DUPLICATE', '该成员在此组织已有该角色');
+    if (membership.role === 'sales' && input.role !== 'sales') {
+      const poolCount = await this.db.salesPoolMember.count({ where: { userId, active: true, pool: { tenantId: actor.tenantId, orgUnitId: membership.orgUnitId, active: true } } });
+      if (poolCount) bad('POOL_MEMBER_IN_USE', '请先从启用的销售池移除该成员');
+    }
+    return this.db.$transaction(async tx => {
+      if (membership.role === 'admin' && input.role !== 'admin') {
+        const admins = await tx.membership.count({ where: { tenantId: actor.tenantId, role: 'admin', user: { active: true } } });
+        if (admins <= 1) bad('LAST_ADMIN', '至少保留一位在职管理员');
+      }
+      const updated = await tx.membership.update({ where: { id: membership.id }, data: { role: input.role } });
+      await tx.session.deleteMany({ where: { tenantId: actor.tenantId, userId } });
+      await this.audit(tx, actor, 'user.role_changed', 'user', userId, { role: membership.role, orgUnitId: membership.orgUnitId }, { role: updated.role, orgUnitId: updated.orgUnitId });
+      return { id: updated.id, role: updated.role, orgUnitId: updated.orgUnitId };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
   async createUser(actor: Actor, body: unknown) {
     requireRole(actor, 'admin');
     const input = parse(z.object({ email: z.string().email(), name: text(1, 100), password: z.string().min(12).max(200), org_unit_id: uuid, role: z.enum(['admin', 'marketing', 'manager', 'sales', 'csm']) }), body);
     await this.ensureOrg(actor.tenantId, input.org_unit_id);
     const { hash: passwordHash } = await import('bcryptjs').then(async b => ({ hash: await b.hash(input.password, 12) }));
-    const user = await this.db.user.create({ data: { tenantId: actor.tenantId, email: input.email.toLowerCase(), name: input.name, passwordHash, memberships: { create: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, role: input.role } } } });
-    return { id: user.id, email: user.email, name: user.name, active: user.active };
+    return this.db.$transaction(async tx => {
+      const user = await tx.user.create({ data: { tenantId: actor.tenantId, email: input.email.toLowerCase(), name: input.name, passwordHash, memberships: { create: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, role: input.role } } } });
+      await this.audit(tx, actor, 'user.created', 'user', user.id, {}, { role: input.role, orgUnitId: input.org_unit_id });
+      return { id: user.id, email: user.email, name: user.name, active: user.active };
+    });
   }
   async setUserActive(actor: Actor, id: string, active: boolean) {
     requireRole(actor, 'admin');
     if (id === actor.id && !active) bad('SELF_DISABLE', '不能停用当前账号');
     const user = await this.db.user.findFirst({ where: { id, tenantId: actor.tenantId } });
     if (!user) bad('NOT_FOUND', '用户不存在', 404);
-    await this.db.user.update({ where: { id }, data: { active } });
-    if (!active) await this.db.session.deleteMany({ where: { tenantId: actor.tenantId, userId: id } });
-    return { id, active };
+    return this.db.$transaction(async tx => {
+      if (!active && user.active) {
+        const adminMembership = await tx.membership.findFirst({ where: { tenantId: actor.tenantId, userId: id, role: 'admin' } });
+        if (adminMembership) {
+          const admins = await tx.user.count({ where: { tenantId: actor.tenantId, active: true, memberships: { some: { role: 'admin' } } } });
+          if (admins <= 1) bad('LAST_ADMIN', '至少保留一位在职管理员');
+        }
+      }
+      await tx.user.update({ where: { id }, data: { active } });
+      if (!active) {
+        await tx.session.deleteMany({ where: { tenantId: actor.tenantId, userId: id } });
+        await tx.salesPoolMember.updateMany({ where: { userId: id, pool: { tenantId: actor.tenantId } }, data: { active: false } });
+      }
+      await this.audit(tx, actor, active ? 'user.enabled' : 'user.disabled', 'user', id, { active: user.active }, { active });
+      return { id, active };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   async createOrg(actor: Actor, body: unknown) {
     requireRole(actor, 'admin'); const input = parse(z.object({ name: text(1, 100), parent_id: uuid.optional() }), body);
@@ -495,18 +539,40 @@ export class CrmService {
   }
   async createPool(actor: Actor, body: unknown) {
     requireRole(actor, 'admin'); const input = parse(z.object({ name: text(1, 100), org_unit_id: uuid, user_ids: z.array(uuid).min(1).max(100) }), body);
+    if (new Set(input.user_ids).size !== input.user_ids.length) bad('POOL_DUPLICATE_MEMBER', '销售池成员不能重复');
     await this.ensureOrg(actor.tenantId, input.org_unit_id);
     for (const userId of input.user_ids) {
-      const member = await this.db.membership.findFirst({ where: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, userId, role: 'sales' } });
-      if (!member) bad('POOL_MEMBER_ROLE', '销售池成员必须是该组织销售');
+      const member = await this.db.membership.findFirst({ where: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, userId, role: 'sales', user: { active: true } } });
+      if (!member) bad('POOL_MEMBER_ROLE', '销售池成员必须是该组织的在职销售');
     }
-    return this.db.salesPool.create({ data: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, name: input.name, members: { create: input.user_ids.map((userId, position) => ({ userId, position })) } }, include: { members: true } });
+    return this.db.$transaction(async tx => {
+      const pool = await tx.salesPool.create({ data: { tenantId: actor.tenantId, orgUnitId: input.org_unit_id, name: input.name, members: { create: input.user_ids.map((userId, position) => ({ userId, position })) } }, include: { members: true } });
+      await this.audit(tx, actor, 'pool.created', 'sales_pool', pool.id, {}, { name: pool.name, memberCount: input.user_ids.length });
+      return pool;
+    });
   }
-  async listPools(actor: Actor) { requireRole(actor, 'admin', 'marketing', 'manager'); return this.db.salesPool.findMany({ where: { tenantId: actor.tenantId }, include: { members: { orderBy: { position: 'asc' } } } }); }
+  async listPools(actor: Actor) { requireRole(actor, 'admin', 'marketing', 'manager'); return this.db.salesPool.findMany({ where: { tenantId: actor.tenantId }, include: { members: { where: { active: true, user: { active: true } }, orderBy: { position: 'asc' } } } }); }
+  async updatePool(actor: Actor, poolId: string, body: unknown) {
+    requireRole(actor, 'admin');
+    const input = parse(z.object({ name: text(1, 100), active: z.boolean(), user_ids: z.array(uuid).min(1).max(100) }), body);
+    if (new Set(input.user_ids).size !== input.user_ids.length) bad('POOL_DUPLICATE_MEMBER', '销售池成员不能重复');
+    const pool = await this.db.salesPool.findFirst({ where: { id: poolId, tenantId: actor.tenantId } });
+    if (!pool) bad('NOT_FOUND', '销售池不存在', 404);
+    for (const userId of input.user_ids) {
+      const member = await this.db.membership.findFirst({ where: { tenantId: actor.tenantId, orgUnitId: pool.orgUnitId, userId, role: 'sales', user: { active: true } } });
+      if (!member) bad('POOL_MEMBER_ROLE', '销售池成员必须是该组织的在职销售');
+    }
+    return this.db.$transaction(async tx => {
+      await tx.salesPoolMember.deleteMany({ where: { poolId } });
+      const updated = await tx.salesPool.update({ where: { id: poolId }, data: { name: input.name, active: input.active, nextIndex: 0, version: { increment: 1 }, members: { create: input.user_ids.map((userId, position) => ({ userId, position })) } }, include: { members: { orderBy: { position: 'asc' } } } });
+      await this.audit(tx, actor, 'pool.updated', 'sales_pool', poolId, { name: pool.name, active: pool.active }, { name: updated.name, active: updated.active, memberCount: input.user_ids.length });
+      return updated;
+    });
+  }
   async autoAssign(actor: Actor, poolId: string, leadId: string, body: unknown) {
     requireRole(actor, 'admin', 'marketing', 'manager'); const input = parse(versionSchema, body);
     const lead = await this.lead(actor, leadId); this.state(lead, ['new', 'returned']);
-    const pool = await this.db.salesPool.findFirst({ where: { id: poolId, tenantId: actor.tenantId, active: true }, include: { members: { where: { active: true }, orderBy: { position: 'asc' } } } });
+    const pool = await this.db.salesPool.findFirst({ where: { id: poolId, tenantId: actor.tenantId, active: true }, include: { members: { where: { active: true, user: { active: true } }, orderBy: { position: 'asc' } } } });
     if (!pool || pool.orgUnitId !== lead.orgUnitId || !pool.members.length) bad('POOL_UNAVAILABLE', '销售池不可用或没有成员');
     const candidate = pool.members[pool.nextIndex % pool.members.length];
     return this.db.$transaction(async tx => {
