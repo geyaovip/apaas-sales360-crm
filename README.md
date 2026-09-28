@@ -52,7 +52,7 @@ node scripts/backup-local.mjs
 
 ## AI 配置与边界
 
-管理员在左下角账号菜单进入“模型接入”，填写兼容 OpenAI Responses API 的 API 根地址、模型名称和 API Key，可先测试再保存。密钥在服务端加密保存，页面不回显；本地初始化脚本会生成随机密钥；其他部署方式需生成并长期保管 `AI_CONFIG_ENCRYPTION_KEY`（可运行 `openssl rand -hex 32`）。也可在 API 服务端配置 `OPENAI_API_KEY`、`OPENAI_MODEL` 和可选的 `OPENAI_BASE_URL` 作为默认值。未配置时核心 CRM 功能照常运行，AI 入口会提示未启用。跟进草稿只供人工检查和保存，不会自动改写客户、商机或跟进记录；发送给模型的上下文受当前用户权限约束。配置说明见[AI 能力与数据边界](docs/06-AI能力实施规划.md)。
+管理员从左下角齿轮进入设置页的“模型接入”，填写兼容 OpenAI Responses API 的 API 根地址、模型名称和 API Key，可先测试再保存。密钥在服务端加密保存，页面不回显；本地初始化脚本会生成随机密钥；其他部署方式需生成并长期保管 `AI_CONFIG_ENCRYPTION_KEY`（可运行 `openssl rand -hex 32`）。也可在 API 服务端配置 `OPENAI_API_KEY`、`OPENAI_MODEL` 和可选的 `OPENAI_BASE_URL` 作为默认值。未配置时核心 CRM 功能照常运行，AI 入口会提示未启用。跟进草稿只供人工检查和保存，不会自动改写客户、商机或跟进记录；发送给模型的上下文受当前用户权限约束。配置说明见[AI 能力与数据边界](docs/06-AI能力实施规划.md)。
 
 ## 开发与验证
 
