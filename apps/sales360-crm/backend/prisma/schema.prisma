@@ -33,6 +33,7 @@ model Tenant {
   externalIdentities ExternalIdentity[]
   servicePlans       ServicePlan[]
   serviceRisks       ServiceRisk[]
+  aiSettings         AiProviderSettings?
 }
 
 model User {
@@ -433,4 +434,14 @@ model ExternalIdentity {
   appId          String
   createdAt      DateTime @default(now())
   @@unique([tenantId, platform, appId, externalUserId])
+}
+
+model AiProviderSettings {
+  tenantId      String   @id
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  model         String
+  baseUrl       String
+  keyCiphertext String
+  updatedBy     String
+  updatedAt     DateTime @updatedAt
 }

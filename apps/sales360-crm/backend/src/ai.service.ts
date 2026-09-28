@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { Actor, AppError, hash, parse } from './common';
 import { PrismaService } from './prisma.service';
 import { CrmService } from './crm.service';
-import { AiTurn, aiConfigured, generateAiAnswer } from './ai-model';
+import { AiTurn, generateAiAnswer } from './ai-model';
+import { aiStatus, clearAiSettings, publicAiSettings, resolveAiConnection, saveAiSettings, testAiSettings } from './ai-settings';
 
 const chatInput = z.object({
   conversation_id: z.string().uuid().optional(),
@@ -21,7 +22,14 @@ const draftFormat = { name: 'crm_follow_up_draft', schema: { type: 'object', add
 export class AiService {
   constructor(private db: PrismaService, private crm: CrmService) {}
 
-  status() { return { configured: aiConfigured(), provider: aiConfigured() ? 'OpenAI' : null }; }
+  status(actor: Actor) { return aiStatus(this.db, actor.tenantId); }
+  settings(actor: Actor) { return publicAiSettings(this.db, actor); }
+  saveSettings(actor: Actor, body: unknown) { return saveAiSettings(this.db, actor, body); }
+  testSettings(actor: Actor, body: unknown) { return testAiSettings(this.db, actor, body); }
+  clearSettings(actor: Actor) { return clearAiSettings(this.db, actor); }
+  private async answer(actor: Actor, instructions: string, context: unknown, turns: AiTurn[], format?: { name: string; schema: Record<string, unknown> }) {
+    return generateAiAnswer(await resolveAiConnection(this.db, actor.tenantId), instructions, context, turns, format);
+  }
 
   private async context(actor: Actor, type: ContextType, id?: string) {
     if (type !== 'dashboard' && !id) throw new AppError('VALIDATION_ERROR', '请选择业务记录后再提问', 400);
@@ -78,14 +86,14 @@ export class AiService {
     const input = parse(draftInput, body);
     const source = await this.context(actor, input.target_type, input.target_id);
     const sourceHash = hash(JSON.stringify(source.data));
-    const raw = await generateAiAnswer('你是 Sales 360 跟进助手。只能根据现有线索、客户、商机和跟进记录整理摘要与沟通问题。draft 是供销售编辑的待记录草稿，不得捏造已发生的电话、会议、承诺、报价或订单；缺失的实际沟通内容要明确待补充。', source.data, [{ role: 'user', content: '请生成可供人工核实和编辑的跟进草稿。' }], draftFormat);
+    const raw = await this.answer(actor, '你是 Sales 360 跟进助手。只能根据现有线索、客户、商机和跟进记录整理摘要与沟通问题。draft 是供销售编辑的待记录草稿，不得捏造已发生的电话、会议、承诺、报价或订单；缺失的实际沟通内容要明确待补充。', source.data, [{ role: 'user', content: '请生成可供人工核实和编辑的跟进草稿。' }], draftFormat);
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { throw new AppError('AI_INVALID_OUTPUT', 'AI 草稿格式无效，请重试', 502); }
     const result = draftSchema.safeParse(parsed);
     if (!result.success) throw new AppError('AI_INVALID_OUTPUT', 'AI 草稿格式无效，请重试', 502);
     const fresh = await this.context(actor, input.target_type, input.target_id);
     if (hash(JSON.stringify(fresh.data)) !== sourceHash) throw new AppError('VERSION_CONFLICT', '业务记录已更新，请重新生成草稿', 409);
-    const row = await this.db.auditLog.create({ data: { tenantId: actor.tenantId, actorId: actor.id, action: 'ai.follow_up_draft', resourceType: 'ai_follow_up_draft', resourceId: input.target_id, after: { targetType: input.target_type, sourceHash, model: process.env.OPENAI_MODEL, draft: result.data } as Prisma.InputJsonValue } });
+    const row = await this.db.auditLog.create({ data: { tenantId: actor.tenantId, actorId: actor.id, action: 'ai.follow_up_draft', resourceType: 'ai_follow_up_draft', resourceId: input.target_id, after: { targetType: input.target_type, sourceHash, model: (await resolveAiConnection(this.db, actor.tenantId))?.model, draft: result.data } as Prisma.InputJsonValue } });
     return { result: result.data, generated_at: row.createdAt, source: { title: source.title, href: source.href } };
   }
 
@@ -96,7 +104,7 @@ export class AiService {
     if (old && (old.contextType !== input.context_type || old.contextId !== (input.context_id || null))) throw new AppError('AI_CONTEXT_CHANGED', '业务对象已切换，请新建对话', 409);
     const history = (old?.messages || []) as AiTurn[];
     const prompt = [...history, { role: 'user' as const, content: input.message }];
-    const answer = await generateAiAnswer('你是 Sales 360 销售业务助手。根据当前线索、客户、商机或工作台数据回答；给出可核实的下一步和可复制的跟进草稿时，明确标记为建议，不能宣称已经保存。', { source: source.title, data: source.data }, prompt);
+    const answer = await this.answer(actor, '你是 Sales 360 销售业务助手。根据当前线索、客户、商机或工作台数据回答；给出可核实的下一步和可复制的跟进草稿时，明确标记为建议，不能宣称已经保存。', { source: source.title, data: source.data }, prompt);
     const messages = [...prompt, { role: 'assistant' as const, content: answer }].slice(-20);
     let conversation;
     if (old) {
@@ -106,7 +114,7 @@ export class AiService {
     } else {
       conversation = await this.db.aiConversation.create({ data: { tenantId: actor.tenantId, userId: actor.id, contextType: input.context_type, contextId: input.context_id, title: source.title, messages: messages as Prisma.InputJsonValue } });
     }
-    await this.db.auditLog.create({ data: { tenantId: actor.tenantId, actorId: actor.id, action: 'ai.chat', resourceType: 'ai_conversation', resourceId: conversation.id, after: { contextType: input.context_type, contextId: input.context_id || null, model: process.env.OPENAI_MODEL } } });
+    await this.db.auditLog.create({ data: { tenantId: actor.tenantId, actorId: actor.id, action: 'ai.chat', resourceType: 'ai_conversation', resourceId: conversation.id, after: { contextType: input.context_type, contextId: input.context_id || null, model: (await resolveAiConnection(this.db, actor.tenantId))?.model } } });
     return { conversation_id: conversation.id, answer, messages, sources: [{ title: source.title, href: source.href }] };
   }
 }
