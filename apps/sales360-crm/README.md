@@ -27,7 +27,7 @@ apps/sales360-crm/
 
 ## 推荐的本地部署
 
-从仓库根目录运行 `node scripts/init-local.mjs` 和 `node scripts/start-local.mjs crm`。首次启动自动迁移、创建管理员并提供正式构建的 Web 与 API；管理员凭据在根目录 `.env`，工作区为 `default`。详见[本地部署与运维](../../docs/08-开源本地部署.md)。
+从仓库根目录运行 `node scripts/init-local.mjs` 和 `node scripts/start-local.mjs crm`。首次启动自动迁移、创建管理员并提供正式构建的 Web 与 API；管理员凭据在根目录 `.env`，登录只需邮箱和密码。详见[本地部署与运维](../../docs/08-开源本地部署.md)。
 
 ## 源码开发启动
 
@@ -38,7 +38,7 @@ docker compose -f apps/sales360-crm/infra/compose.yaml up -d
 cp apps/sales360-crm/backend/.env.example apps/sales360-crm/backend/.env
 ```
 
-编辑 `.env`，设置唯一的 `CRM_BOOTSTRAP_PASSWORD`（至少 12 位）。在 `apps/sales360-crm/backend/` 执行 `pnpm db:deploy`、`pnpm admin:create`、`pnpm build`、`pnpm start`；在 `apps/sales360-crm/frontend/` 执行 `pnpm dev`。打开 http://127.0.0.1:4300，工作区填 `default`。
+编辑 `.env`，设置唯一的 `CRM_BOOTSTRAP_PASSWORD`（至少 12 位）。在 `apps/sales360-crm/backend/` 执行 `pnpm db:deploy`、`pnpm admin:create`、`pnpm build`、`pnpm start`；在 `apps/sales360-crm/frontend/` 执行 `pnpm dev`。打开 http://127.0.0.1:4300，使用管理员邮箱和密码登录。
 
 运行中的本地环境可在仓库根目录执行 `pnpm test:crm`。测试会创建角色、线索、客户、商机、服务计划、任务、风险和续约记录，并检查越权与幂等。前后端生产构建执行 `pnpm build:crm`。
 

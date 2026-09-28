@@ -18,7 +18,7 @@ export class AuthController {
     const input = parse(loginSchema, body);
     const tenant = await this.db.tenant.findUnique({ where: { slug: input.workspace } });
     const user = tenant ? await this.db.user.findUnique({ where: { tenantId_email: { tenantId: tenant.id, email: input.email.toLowerCase() } }, include: { memberships: true } }) : null;
-    if (!user || !user.active || !(await compare(input.password, user.passwordHash))) throw new AppError('INVALID_CREDENTIALS', '工作区、邮箱或密码错误', 401);
+    if (!user || !user.active || !(await compare(input.password, user.passwordHash))) throw new AppError('INVALID_CREDENTIALS', '邮箱或密码错误', 401);
     const token = randomBytes(32).toString('base64url');
     await this.db.session.create({ data: { tenantId: tenant!.id, userId: user.id, tokenHash: hash(token), expiresAt: new Date(Date.now() + sessionMs) } });
     res.cookie('crm_session', token, { httpOnly: true, secure: process.env.COOKIE_SECURE !== 'false', sameSite: 'strict', path: '/', maxAge: sessionMs });
